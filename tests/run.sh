@@ -516,6 +516,92 @@ make_project_repo "${EMPTY_PROJ}" no
 EMPTY_LIST=$(cd "${EMPTY_PROJ}" && "${NOOK}" list)
 assert_contains "empty list explains how to create one" "${EMPTY_LIST}" "git nook init"
 
+# --- status: one-line working-tree report per nook -------------------------------
+
+section "status: healthy nooks report branch and dirty count"
+
+# Fresh fixture: status asserts on exact dirty counts, so it must not share a
+# project with sections that leave stray files behind.
+ST_PROJ="${WORK}/proj-status"
+make_project_repo "${ST_PROJ}" yes "status"
+(cd "${ST_PROJ}" && "${NOOK}" init notes origin >/dev/null)
+ST_SLUG=$(slug_for_name "${ST_PROJ}" notes)
+
+# A brand-new nook has no commits yet: status must still report, not crash.
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_exit_zero "status on a fresh unborn nook exits 0"
+assert_contains "status names the slug" "${RUN_OUT}" "${ST_SLUG}"
+assert_contains "status names the dir" "${RUN_OUT}" "notes/"
+
+# Commit so there is a real branch + upstream to report on.
+printf 'one\n' > "${ST_PROJ}/notes/a.txt"
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run add --all && "${NOOK}" -n notes run commit -q -m first)
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run push -q >/dev/null 2>&1)
+
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_exit_zero "status of a clean pushed nook exits 0"
+assert_contains "status reports the tracking branch" "${RUN_OUT}" "main...origin/main"
+assert_contains "status reports clean" "${RUN_OUT}" "clean"
+
+# One untracked file -> singular "1 change".
+printf 'two\n' > "${ST_PROJ}/notes/b.txt"
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_exit_zero "status of a dirty-but-healthy nook still exits 0"
+assert_contains "status counts a single change in the singular" "${RUN_OUT}" "1 change"
+
+# Two changes -> plural.
+printf 'three\n' > "${ST_PROJ}/notes/c.txt"
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_contains "status counts multiple changes in the plural" "${RUN_OUT}" "2 changes"
+
+# Ahead-of-upstream shows up in the tracking column.
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run add --all && "${NOOK}" -n notes run commit -q -m second)
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_contains "status reports ahead count" "${RUN_OUT}" "ahead 1"
+
+# Tab-separated: the line stays cuttable into slug / dir / rest.
+ST_LINE=$(cd "${ST_PROJ}" && "${NOOK}" status | head -n 1)
+assert_eq "status line field 1 is the slug" "${ST_SLUG}" "$(printf '%s' "${ST_LINE}" | cut -f1)"
+assert_eq "status line field 2 is the dir" "notes/" "$(printf '%s' "${ST_LINE}" | cut -f2)"
+
+section "status: reports every nook, including a broken one, and exits nonzero"
+
+# Two nooks in one repo: a healthy one and a broken one. The broken one must
+# not suppress the healthy one's line -- status reports all, then trips rc.
+(cd "${ST_PROJ}" && "${NOOK}" init scratch origin --dir scratchpad >/dev/null)
+ST_SCRATCH_SLUG=$(slug_for_name "${ST_PROJ}" scratch)
+rm -rf "${ST_PROJ}/.git/nook/${ST_SCRATCH_SLUG}.git"
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_exit_nonzero "status exits nonzero when a nook is broken"
+assert_contains "status flags the missing inner repo" "${RUN_OUT}" "no inner repo"
+assert_contains "status still reports the healthy nook alongside the broken one" "${RUN_OUT}" "${ST_SLUG}"
+if [[ "${RUN_OUT}" == *"fatal:"* ]]; then fail "raw git error leaked from status"; else pass "status leaks no raw git error"; fi
+
+section "status: flags a dangling primary home instead of aborting"
+
+ST_GONE="${WORK}/proj-status-gone"
+make_project_repo "${ST_GONE}" yes "status-gone"
+(cd "${ST_GONE}" && "${NOOK}" init vault origin >/dev/null)
+ST_GONE_SLUG=$(slug_for_name "${ST_GONE}" vault)
+printf 'keep\n' > "${ST_GONE}/vault/k.txt"
+(cd "${ST_GONE}" && "${NOOK}" -n vault run add --all && "${NOOK}" -n vault run commit -q -m keep)
+rm -rf "${ST_GONE}/vault"
+run_cmd_in "${ST_GONE}" "${NOOK}" status
+assert_exit_nonzero "status exits nonzero when the primary home is gone"
+assert_contains "status points at materialize for a dangling home" "${RUN_OUT}" "git nook -n ${ST_GONE_SLUG} materialize"
+# And it recovers cleanly once materialized.
+(cd "${ST_GONE}" && "${NOOK}" materialize >/dev/null)
+run_cmd_in "${ST_GONE}" "${NOOK}" status
+assert_exit_zero "status exits 0 again after materialize"
+
+section "status: no nooks configured"
+
+ST_EMPTY="${WORK}/proj-status-empty"
+make_project_repo "${ST_EMPTY}" no
+run_cmd_in "${ST_EMPTY}" "${NOOK}" status
+assert_exit_zero "status with no nooks exits 0"
+assert_contains "empty status explains how to create one" "${RUN_OUT}" "git nook init"
+
 # --- passthrough: full git against the inner repo --------------------------------
 
 section "passthrough: status/add/commit/log round trip"
