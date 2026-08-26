@@ -290,6 +290,8 @@ git nook list
 git nook materialize             # link configured nooks into this worktree
 git nook reindex                 # rebuild the collection index from truth
 git nook -n <name> show
+git nook -n <name> git-dir       # print the nook's git-dir path, and nothing else
+git nook -n <name> home          # print the nook's content dir, and nothing else
 git nook -n <name> remove [--force]
 git nook -n <name> destroy --yes
 git nook -n <name> run <git-args...>    # run any git command against the nook
@@ -311,8 +313,47 @@ is irreversible and aborts, changing nothing, if it can't reach the remote.
 `materialize` creates the missing symlink(s) for already-configured nooks
 in the worktree you run it from — use it after `git clone` or after `git
 worktree add`; `reindex` rebuilds `refs/nook/index` from every nook's
-manifest, for when the index is stale or missing; everything else
-(`-n <name> run <git-args...>`) is passthrough git.
+manifest, for when the index is stale or missing; `-n <name> git-dir` and
+`-n <name> home` each print a single bare path for scripts and external
+tools (see below); everything else (`-n <name> run <git-args...>`) is
+passthrough git.
+
+## Diffing and browsing a nook
+
+A nook is a real git repository, so every history tool works on it — the
+objects are already on disk locally, and nothing has to be published anywhere
+first. `run` forwards any git command:
+
+```sh
+git nook -n notes run difftool HEAD~3
+git nook -n notes run log --graph --oneline --stat
+git nook -n notes run show HEAD:some/file.md
+```
+
+That is the easiest path, and the one to reach for first.
+
+For a **standalone GUI** (Fork, GitKraken, Sublime Merge, …) or any tool that
+wants paths rather than a git command, `git-dir` and `home` each print exactly
+one bare path, so they compose directly:
+
+```sh
+git --git-dir="$(git nook -n notes git-dir)" \
+    --work-tree="$(git nook -n notes home)" difftool HEAD~3
+```
+
+Pass **both**. The nook's git-dir has no work tree attached to it, and because
+the inner repo sets `core.bare false`, giving git only `--git-dir` does not
+error — git silently treats your *current directory* as the work tree and
+compares the wrong files. Note also that `git -C "$(git nook -n notes git-dir)"`
+does not work for anything needing a work tree; use the two-flag form above.
+
+Some GUIs assume a repo looks like `<project>/.git` and won't open a bare
+git-dir path directly. If yours doesn't, `run` is the fallback that always
+works.
+
+Commands that read files (rather than just objects) need the nook materialized
+in the worktree you're standing in — `git nook -n <name> show` reports
+`linked: no` when it isn't, and `git nook materialize` fixes that.
 
 ## Releasing
 

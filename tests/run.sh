@@ -511,6 +511,77 @@ assert_contains "show of broken nook prints url (none)" "${RUN_OUT}" "url:      
 BROKEN_LIST=$(cd "${BROKEN_PROJ}" && "${NOOK}" list)
 assert_contains "list flags the missing inner repo" "${BROKEN_LIST}" "(no inner repo)"
 
+# --- git-dir / home: bare path printers for external tools ----------------------
+
+section "git-dir / home: print one bare path, composable in \$( )"
+
+# The whole point is composability: a caller must be able to drop these into a
+# subshell and hand the result to a GUI or to git directly, with no awk/sed
+# post-processing. So assert exact equality (not contains) and exactly one
+# line of output -- a stray label or blank line would silently break `cd "$(...)"`.
+# Compare against the PHYSICAL path: cd_to_toplevel resolves symlinks, and on
+# macOS ${TMPDIR}/var/folders is itself a symlink into /private -- so the
+# command's (correct, real) output would never match the raw fixture string.
+# Emitting a resolved path is the desired behavior; a GUI wants a real path.
+ADD_PROJ_REAL=$(cd "${ADD_PROJ}" && pwd -P)
+GD_OUT=$(cd "${ADD_PROJ}" && "${NOOK}" -n notes git-dir)
+assert_eq "git-dir prints exactly the inner git-dir path" \
+    "${ADD_PROJ_REAL}/.git/nook/${NOTES_SLUG}.git" "${GD_OUT}"
+assert_eq "git-dir prints exactly one line" "1" "$(printf '%s\n' "${GD_OUT}" | wc -l | tr -d ' ')"
+
+HOME_OUT=$(cd "${ADD_PROJ}" && "${NOOK}" -n notes home)
+assert_eq "home prints exactly the content dir path" "${ADD_PROJ_REAL}/notes" "${HOME_OUT}"
+assert_eq "home prints exactly one line" "1" "$(printf '%s\n' "${HOME_OUT}" | wc -l | tr -d ' ')"
+
+# Both paths agree with what show reports (one source of truth, two surfaces).
+GDHOME_SHOW=$(cd "${ADD_PROJ}" && "${NOOK}" -n notes show)
+assert_contains "show's git-dir field agrees with the git-dir command" "${GDHOME_SHOW}" "git-dir:  ${GD_OUT}"
+assert_contains "show's home field agrees with the home command" "${GDHOME_SHOW}" "home:     ${HOME_OUT}"
+
+# The composed pair is the documented recipe for an external tool. This nook has
+# no commits yet, so assert on a work-tree command that succeeds on an unborn
+# HEAD (`status`) rather than `log`, which exits nonzero with no commits and --
+# under set -e -- would kill the suite. `status` is also the sharper test: it is
+# exactly what fails with "must be run in a work tree" when --work-tree is
+# omitted, which is the mistake the two-path recipe exists to prevent.
+GDHOME_STATUS=$(git --git-dir="${GD_OUT}" --work-tree="${HOME_OUT}" status --porcelain 2>&1 || true)
+assert_true "composed git-dir+work-tree pair drives a work-tree git command" \
+    test "${GDHOME_STATUS}" = "${GDHOME_STATUS/must be run in a work tree/}"
+# And the git-dir alone genuinely is NOT enough -- this is why `home` exists.
+# The inner repo sets core.bare false, so `--git-dir` WITHOUT `--work-tree`
+# does not error: git silently treats the CURRENT directory as the work tree
+# and reports confident nonsense (the caller's own files vs the nook's index).
+# Assert that wrong-but-quiet behavior explicitly, so the two-path recipe in
+# --help is pinned as a correctness requirement, not a mere convenience.
+GDONLY=$( (cd "${WORK}" && git --git-dir="${GD_OUT}" status --porcelain 2>&1) || true )
+assert_true "git-dir alone silently uses cwd as the work tree (so --work-tree is required)" \
+    test "${GDONLY}" != "${GDHOME_STATUS}"
+
+# Partial-name resolution works here exactly as it does for the other -n verbs.
+GD_PARTIAL=$(cd "${ADD_PROJ}" && "${NOOK}" -n note git-dir)
+assert_eq "git-dir resolves a partial name to the same path" "${GD_OUT}" "${GD_PARTIAL}"
+
+run_cmd_in "${ADD_PROJ}" "${NOOK}" -n nope git-dir
+assert_exit_nonzero "git-dir of unknown nook exits nonzero"
+run_cmd_in "${ADD_PROJ}" "${NOOK}" -n nope home
+assert_exit_nonzero "home of unknown nook exits nonzero"
+
+# An unelected home must be a hard error, never an empty line on stdout:
+# `cd "$(git nook -n x home)"` would otherwise silently cd to $HOME.
+UNELECTED="${WORK}/proj-unelected-home"
+make_project_repo "${UNELECTED}" yes "unelected-home"
+(cd "${UNELECTED}" && "${NOOK}" init lonely origin >/dev/null)
+UNELECTED_SLUG=$(slug_for_name "${UNELECTED}" lonely)
+git -C "${UNELECTED}" config --unset "nook.${UNELECTED_SLUG}.home"
+run_cmd_in "${UNELECTED}" "${NOOK}" -n lonely home
+assert_exit_nonzero "home with no recorded home exits nonzero"
+assert_contains "home with no recorded home hints at materialize" "${RUN_OUT}" "materialize"
+# run_cmd_in folds stderr into RUN_OUT, so capture stdout ALONE here: the
+# hazard being tested is specifically an empty line on STDOUT (which would
+# make `cd "$(... home)"` succeed into $HOME), not the absence of a message.
+UNELECTED_STDOUT=$( (cd "${UNELECTED}" && "${NOOK}" -n lonely home 2>/dev/null) || true )
+assert_eq "home with no recorded home prints nothing on stdout" "" "${UNELECTED_STDOUT}"
+
 EMPTY_PROJ="${WORK}/proj-empty-list"
 make_project_repo "${EMPTY_PROJ}" no
 EMPTY_LIST=$(cd "${EMPTY_PROJ}" && "${NOOK}" list)

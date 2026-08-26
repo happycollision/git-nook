@@ -38,6 +38,8 @@ Usage:
   git nook materialize             # link configured nooks into this worktree
   git nook reindex                 # rebuild the collection index from truth
   git nook -n <name> show
+  git nook -n <name> git-dir           # print the nook's git-dir path (only)
+  git nook -n <name> home              # print the nook's content dir (only)
   git nook -n <name> remove [--force]
   git nook -n <name> destroy --yes
   git nook -n <name> run <git-args...>   # run any git command against the nook
@@ -52,6 +54,17 @@ under refs/nook/<slug>/, so push/pull/status work out of the box:
   git nook -n notes run add --all
   git nook -n notes run commit -m "something"
   git nook -n notes run push
+
+Diff or browse a nook with any git tool -- 'run' forwards anything:
+
+  git nook -n notes run difftool HEAD~3
+  git nook -n notes run log --graph --oneline
+
+For a standalone GUI, hand it the two paths (it needs both: the git-dir has
+no work tree attached):
+
+  git --git-dir="\$(git nook -n notes git-dir)" \\
+      --work-tree="\$(git nook -n notes home)" difftool HEAD~3
 EOF
 }
 
@@ -1202,6 +1215,45 @@ cmd_materialize() {
     return "${rc}"
 }
 
+# Print one bare absolute path and nothing else, so the value composes
+# directly in a subshell without post-processing:
+#
+#   fork "$(git nook -n beads git-dir)"
+#   cd "$(git nook -n beads home)"
+#
+# These are diagnostic path-printers: they never materialize, never touch a
+# remote, and never mutate config. cmd_show reports the same two values as
+# labeled fields; these exist because awk-ing `show` output is clumsy when
+# launching an external GUI that wants a path rather than a git command.
+#
+# Unlike show (which degrades to "(not elected)" and keeps going), an absent
+# home is a hard error here: printing an empty line and exiting 0 would make
+# `cd "$(... home)"` silently succeed into $HOME.
+cmd_path() {
+    require_work_tree
+    cd_to_toplevel
+    local what="$1" partial="${2:-}" slug out
+    [[ -n "${partial}" ]] || { err "usage: git nook -n <name> ${what}"; exit 1; }
+    slug=$(resolve_slug_prefix "${partial}") || exit 1
+    if ! channel_dir "${slug}" >/dev/null; then
+        err "no nook named '${slug}' (see: git nook list)"
+        exit 1
+    fi
+    case "${what}" in
+        git-dir)
+            out=$(inner_git_dir "${slug}")
+            ;;
+        home)
+            out=$(primary_home "${slug}")
+            if [[ -z "${out}" ]]; then
+                err "nook '${slug}' has no recorded home; run: git nook -n ${slug} materialize"
+                exit 1
+            fi
+            ;;
+    esac
+    printf '%s\n' "${out}"
+}
+
 cmd_show() {
     require_work_tree
     cd_to_toplevel
@@ -1552,6 +1604,14 @@ main() {
             case "${1:-}" in
                 show)
                     shift; cmd_show "${name}" "$@" ;;
+                git-dir | home)
+                    # Grouped with show, not with remove/destroy/run: these are
+                    # diagnostic path-printers, so they are exempt from the
+                    # dangling-primary guard below. `home` must still report the
+                    # RECORDED home even when this worktree is unlinked -- that
+                    # path is exactly what the user needs to point a tool at.
+                    local what="$1"
+                    shift; cmd_path "${what}" "${name}" "$@" ;;
                 materialize)
                     # Exempt from the dangling-primary guard below: this is
                     # exactly how a worktree recovers from a missing home
@@ -1617,7 +1677,7 @@ main() {
             ;;
         *)
             err "unknown command '${1}'"
-            echo "git-nook: see 'git nook list'; select a nook with 'git nook -n <name> <show|remove|run>'; create one with 'git nook init <name> <target>' (or: 'git nook clone <name> <target>')" >&2
+            echo "git-nook: see 'git nook list'; select a nook with 'git nook -n <name> <show|git-dir|home|remove|run>'; create one with 'git nook init <name> <target>' (or: 'git nook clone <name> <target>')" >&2
             exit 1
             ;;
     esac
