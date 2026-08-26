@@ -9,16 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`git nook status`** — reports the working-tree state of every nook
-  configured in the current repo, one tab-separated line each: slug, content
-  dir, branch/tracking state (e.g. `main...origin/main [ahead 1]`), and a count
-  of changed files (`clean`, `1 change`, `N changes`).
-- `git nook status` exits nonzero if any nook is broken, printing the specific
-  problem inline on that nook's line rather than aborting the whole report: a
-  missing inner repo, a dangling primary home (with the `materialize` hint), or
-  a nook not linked into the current worktree. Every other nook is still
-  reported. A nook that is merely dirty is healthy and does not affect the exit
-  status.
+- `git nook status` — one-line working-tree report per nook: dirty state and
+  position relative to the remote. Exits nonzero if any nook is broken.
 
 ## [0.4.0] - 2026-07-22
 

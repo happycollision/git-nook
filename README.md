@@ -301,11 +301,18 @@ git nook --help | --version
 existing nook published under that name (disambiguating by slug if several
 match); `list` shows every nook configured in the current repo (flagging any
 that aren't linked into the current worktree, and warning about any legacy,
-pre-slug nooks); `status` reports the working-tree state of every nook, one
-line each — branch and tracking state plus a count of changed files — and
-exits nonzero if any nook is broken (missing inner repo, dangling primary
-home, or not linked into this worktree), printing the problem on that nook's
-line; `-n <name> show` prints its slug, name, uuid, and resolved
+pre-slug nooks); `status` reports every nook's working-tree state, one line
+each, as `<name>: <clean|N changes>, <position> remote` — and exits nonzero if
+any nook is broken (missing inner repo, dangling primary home, or not linked
+into this worktree), printing the problem in place of that nook's state:
+
+```
+$ git nook status
+beads: 2 changes, ahead of remote
+notes: clean, up to date with remote
+```
+
+`-n <name> show` prints its slug, name, uuid, and resolved
 checkout path, link state, remote URL, push refspec, and current
 branch/tracking state; `-n <name> remove [--force]` fully deletes the nook
 *locally* — config, exclude entry, inner git dir, container, and symlink —
