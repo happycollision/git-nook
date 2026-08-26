@@ -161,8 +161,12 @@ beads rather than dropped in chat or a commit message. Prefix the title with
 
 ## Observation
 
-Since we develop `git-nook`, always use it and observe its behavior. After
-any `git nook -n beads run push`, verify the ref actually updated:
+This applies to `git nook` only — it is the tool under development here, so
+we use it and watch what it actually does. Ordinary git in the host repo is
+not under test: `git push`, `git commit`, and friends are trusted, and their
+output is the confirmation. Do not tack verification steps onto them.
+
+After any `git nook -n beads run push`, verify the ref actually updated:
 
 ```bash
 git ls-remote origin 'refs/nook/*'
