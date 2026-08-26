@@ -77,18 +77,6 @@ never appears in branch listings or default clones. The nook's *checkout*
 (the actual files) no longer lives under `.git/` — see "Worktrees" below;
 only the inner repo (objects/refs) does.
 
-> **Note (worktree-home layout, as of 2026-07-22).** The `br` workflow and
-> session protocol above operate normally against this repo's `beads` nook.
-> Two caveats while the worktree-home fix is unmerged:
-> 1. The fix lives on branch **`feat/nook-worktree-home`** (not yet merged to
->    master), and the **installed** `git-nook` predates it. Run nook commands
->    via **`./bin/git-nook`** from the repo root, NOT the installed `git nook`,
->    until the branch merges and you reinstall via `./install.sh`.
-> 2. The `.beads` checkout is a real directory at `<repo>/.beads`, home recorded
->    in local-only `nook.<slug>.home`. Other machines/clones must upgrade to the
->    worktree-home git-nook and run `git nook materialize` before touching beads
->    there.
-
 This project's own issues (beads) are tracked in exactly such a nook:
 
 ```bash
@@ -96,22 +84,14 @@ git nook list                 # see this repo's nooks (expect: beads)
 git nook -n beads run status  # any git command works against the nook
 ```
 
-> **Note:** this repo's own `beads` nook is fully migrated as of 2026-07-22 —
-> both the identity/slug layout (config is slug-keyed
-> `nook.beads.86d.happycollision.git_nook.dir`) and the worktree-home checkout
-> relocation (`.beads` is now a real directory outside `.git/`, home recorded
-> in local-only `nook.<slug>.home`). `br` works here. Use `./bin/git-nook`
-> until `feat/nook-worktree-home` merges (see warning above).
-
-The daily beads flow on this repo (working again — use `./bin/git-nook` until
-the branch merges; substitute `git nook` once reinstalled):
+The daily beads flow on this repo:
 
 ```bash
 br sync --flush-only          # beads DB -> .beads/issues.jsonl
-./bin/git-nook -n beads run add issues.jsonl
-./bin/git-nook -n beads run commit -m "issues"
-./bin/git-nook -n beads run pull --no-rebase   # only needed when another machine pushed
-./bin/git-nook -n beads run push
+git nook -n beads run add issues.jsonl
+git nook -n beads run commit -m "issues"
+git nook -n beads run pull --no-rebase   # only needed when another machine pushed
+git nook -n beads run push
 ```
 
 If a pull merges `issues.jsonl` from another machine, do NOT hand-resolve
