@@ -19,7 +19,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
 #
 #   git nook init <name> <target> [--dir <d>]
 #   git nook clone <name> <target> [--dir <d>]
-#   git nook list | materialize | reindex
+#   git nook list | status | materialize | reindex
 #   git nook -n <name> show | remove | destroy | run <any-git-args...>
 #
 # Design: docs/plans/2026-07-05-git-nook-design.md
@@ -35,6 +35,7 @@ Usage:
   git nook init <name> <target-url-or-remote> [--dir <dir>]
   git nook clone <name> <target-url-or-remote> [--dir <dir>]
   git nook list
+  git nook status                  # working-tree state of every nook
   git nook materialize             # link configured nooks into this worktree
   git nook reindex                 # rebuild the collection index from truth
   git nook -n <name> show
@@ -1184,6 +1185,117 @@ cmd_list() {
     fi
 }
 
+# Report the working-tree state of every configured nook, one line each:
+#
+#   <name>: <clean|N changes>, <position relative to the remote>
+#
+# This is a read-only reporter: it never elects a home, never materializes,
+# never touches the inner repo's refs. A nook that cannot be reported on
+# (missing inner repo, not linked into this worktree, dangling primary home)
+# gets its problem printed in place of the state and sets the exit status to
+# 1 -- the report itself still completes for every other nook. A nook that is
+# merely DIRTY is healthy and does not affect the exit status.
+cmd_status() {
+    require_work_tree
+    cd_to_toplevel
+    warn_if_legacy
+    local slug name dir gitdir content_path home_real content_real
+    local found=0 rc=0 sb dirty_count dirty upstream counts ahead behind position
+    while read -r slug; do
+        [[ -n "${slug}" ]] || continue
+        found=1
+        # The slug is name.id3.owner.repo; report the bare name -- the
+        # provenance fields are disambiguation machinery, not what the user
+        # calls this nook. `show` still prints the full slug.
+        name="${slug%%.*}"
+        dir=$(channel_dir "${slug}")
+        gitdir=$(inner_git_dir "${slug}")
+        content_path="$(pwd)/${dir}"
+
+        # Broken-state triage, most fundamental first. Each arm prints the
+        # problem in place of the status columns and trips rc.
+        if [[ ! -d "${gitdir}" ]]; then
+            printf '%s: no inner repo (was .git/nook/%s.git deleted?)\n' "${name}" "${slug}"
+            rc=1
+            continue
+        fi
+        # Linked here = content_path resolves to the recorded home (whether
+        # content_path IS the home, a real dir in the primary worktree, or a
+        # symlink to it in a peer worktree). Same test cmd_list uses.
+        if ! home_real=$(resolve_primary "${slug}" 2>/dev/null); then
+            printf '%s: content missing, run: git nook -n %s materialize\n' "${name}" "${slug}"
+            rc=1
+            continue
+        fi
+        if ! { content_real=$( { [[ -d "${content_path}" ]] || [[ -L "${content_path}" ]]; } \
+                && cd "${content_path}" 2>/dev/null && pwd -P) ; } \
+            || [[ "${content_real}" != "${home_real}" ]]; then
+            printf '%s: not linked here, run: git nook materialize\n' "${name}"
+            rc=1
+            continue
+        fi
+
+        # Healthy: report branch/tracking and a dirty-file count. Run against
+        # the resolved home rather than the relative dir so the symlinked
+        # peer-worktree case reads the one live checkout.
+        #
+        # `status -sb --porcelain` gives a stable, parseable shape regardless
+        # of the user's git config: line 1 is "## <branch>...<upstream> [ahead N]",
+        # every remaining line is one changed path. Guarded because a nook whose
+        # inner repo is present but unreadable must degrade to a reported
+        # problem, not kill the loop under set -e/pipefail.
+        if ! sb=$(git --git-dir="${gitdir}" --work-tree="${home_real}" \
+                    -C "${home_real}" status -sb --porcelain 2>/dev/null); then
+            printf '%s: unreadable, try: git nook -n %s run status\n' "${name}" "${slug}"
+            rc=1
+            continue
+        fi
+        # Count changed paths = every porcelain line after the "## " header.
+        dirty_count=$(printf '%s\n' "${sb}" | tail -n +2 | grep -c . || true)
+        if [[ "${dirty_count}" -eq 0 ]]; then
+            dirty="clean"
+        elif [[ "${dirty_count}" -eq 1 ]]; then
+            dirty="1 change"
+        else
+            dirty="${dirty_count} changes"
+        fi
+
+        # Position relative to the remote. Ask rev-list directly rather than
+        # parsing status's "[ahead N]" suffix: rev-list distinguishes the
+        # diverged case (ahead AND behind), which the porcelain header
+        # collapses, and it reports 0/0 for up-to-date without special-casing.
+        # @{upstream} resolves the configured upstream for the current branch;
+        # it fails when none is configured or the branch is unborn.
+        if upstream=$(git --git-dir="${gitdir}" --work-tree="${home_real}" \
+                        -C "${home_real}" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null) \
+            && [[ -n "${upstream}" ]] \
+            && counts=$(git --git-dir="${gitdir}" --work-tree="${home_real}" \
+                        -C "${home_real}" rev-list --left-right --count 'HEAD...@{upstream}' 2>/dev/null); then
+            ahead="${counts%%[[:space:]]*}"
+            behind="${counts##*[[:space:]]}"
+            if [[ "${ahead}" -gt 0 && "${behind}" -gt 0 ]]; then
+                position="ahead of and behind remote"
+            elif [[ "${ahead}" -gt 0 ]]; then
+                position="ahead of remote"
+            elif [[ "${behind}" -gt 0 ]]; then
+                position="behind remote"
+            else
+                position="up to date with remote"
+            fi
+        else
+            # No upstream configured, or nothing to compare against yet (unborn
+            # branch, never pushed). Not a fault -- just nothing to say about
+            # the remote.
+            position="no remote yet"
+        fi
+        printf '%s: %s, %s\n' "${name}" "${dirty}" "${position}"
+    done < <(all_slugs)
+    if [[ "${found}" -eq 0 ]]; then
+        echo "git-nook: no nooks configured here; create one with: git nook init <name> <target> (or: git nook clone <name> <target>)"
+    fi
+    return "${rc}"
+}
+
 cmd_materialize() {
     require_work_tree
     cd_to_toplevel
@@ -1514,6 +1626,7 @@ main() {
         init)   shift; cmd_init "$@" ;;
         clone)  shift; cmd_clone "$@" ;;
         list)   shift; cmd_list "$@" ;;
+        status) shift; cmd_status "$@" ;;
         materialize) shift; cmd_materialize "$@" ;;
         reindex) shift; cmd_reindex "$@" ;;
         --version | version) echo "git-nook ${VERSION}" ;;

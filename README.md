@@ -287,6 +287,7 @@ The remaining trade-offs are per-nook choices, not tool limitations:
 git nook init <name> <target-url-or-remote> [--dir <dir>]     # create a fresh nook
 git nook clone <name> <target-url-or-remote> [--dir <dir>]    # adopt an existing nook
 git nook list
+git nook status                  # working-tree state of every nook
 git nook materialize             # link configured nooks into this worktree
 git nook reindex                 # rebuild the collection index from truth
 git nook -n <name> show
@@ -300,7 +301,18 @@ git nook --help | --version
 existing nook published under that name (disambiguating by slug if several
 match); `list` shows every nook configured in the current repo (flagging any
 that aren't linked into the current worktree, and warning about any legacy,
-pre-slug nooks); `-n <name> show` prints its slug, name, uuid, and resolved
+pre-slug nooks); `status` reports every nook's working-tree state, one line
+each, as `<name>: <clean|N changes>, <position> remote` — and exits nonzero if
+any nook is broken (missing inner repo, dangling primary home, or not linked
+into this worktree), printing the problem in place of that nook's state:
+
+```
+$ git nook status
+beads: 2 changes, ahead of remote
+notes: clean, up to date with remote
+```
+
+`-n <name> show` prints its slug, name, uuid, and resolved
 checkout path, link state, remote URL, push refspec, and current
 branch/tracking state; `-n <name> remove [--force]` fully deletes the nook
 *locally* — config, exclude entry, inner git dir, container, and symlink —

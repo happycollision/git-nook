@@ -516,6 +516,119 @@ make_project_repo "${EMPTY_PROJ}" no
 EMPTY_LIST=$(cd "${EMPTY_PROJ}" && "${NOOK}" list)
 assert_contains "empty list explains how to create one" "${EMPTY_LIST}" "git nook init"
 
+# --- status: one-line working-tree report per nook -------------------------------
+
+section "status: line format is '<name>: <dirty>, <position> remote'"
+
+# Fresh fixture: status asserts on exact dirty counts, so it must not share a
+# project with sections that leave stray files behind.
+ST_PROJ="${WORK}/proj-status"
+make_project_repo "${ST_PROJ}" yes "status"
+(cd "${ST_PROJ}" && "${NOOK}" init notes origin >/dev/null)
+ST_SLUG=$(slug_for_name "${ST_PROJ}" notes)
+
+# The report is keyed by the BARE NAME, not the slug: the provenance fields
+# are disambiguation machinery, not what the user calls this nook.
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_exit_zero "status on a fresh unborn nook exits 0"
+assert_eq "unborn nook reports no remote yet" "notes: clean, no remote yet" "${RUN_OUT}"
+if [[ "${RUN_OUT}" == *"${ST_SLUG}"* ]]; then fail "status leaked the full slug"; else pass "status reports the bare name, not the slug"; fi
+
+# Commit + push so there is a real upstream to compare against.
+printf 'one\n' > "${ST_PROJ}/notes/a.txt"
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run add --all && "${NOOK}" -n notes run commit -q -m first)
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run push -q >/dev/null 2>&1)
+
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_exit_zero "status of a clean pushed nook exits 0"
+assert_eq "clean + synced line" "notes: clean, up to date with remote" "${RUN_OUT}"
+
+# One untracked file -> singular "1 change".
+printf 'two\n' > "${ST_PROJ}/notes/b.txt"
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_exit_zero "status of a dirty-but-healthy nook still exits 0"
+assert_eq "singular change is not pluralized" "notes: 1 change, up to date with remote" "${RUN_OUT}"
+
+# Two changes -> plural.
+printf 'three\n' > "${ST_PROJ}/notes/c.txt"
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_eq "multiple changes are pluralized" "notes: 2 changes, up to date with remote" "${RUN_OUT}"
+
+# Local commit with nothing pushed -> ahead.
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run add --all && "${NOOK}" -n notes run commit -q -m second)
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_eq "ahead of remote" "notes: clean, ahead of remote" "${RUN_OUT}"
+
+section "status: behind and diverged positions"
+
+# Push our commit, then move the remote ref forward independently and rewind
+# ours, so HEAD is strictly behind the upstream.
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run push -q >/dev/null 2>&1)
+# A nook publishes ONLY to refs/nook/<slug>/files, which a plain `git clone`
+# does not fetch -- cloning the origin yields an EMPTY repo whose commits are
+# unrelated, and pushing those is correctly rejected as non-fast-forward. So
+# seed the peer by fetching the nook ref explicitly and building on it.
+ST_REF="refs/nook/${ST_SLUG}/files"
+ST_PEER="${WORK}/status-peer"
+git init -q "${ST_PEER}"
+git -C "${ST_PEER}" fetch -q "${WORK}/origins/status.git" "${ST_REF}:refs/heads/main"
+git -C "${ST_PEER}" checkout -q main
+printf 'remote\n' > "${ST_PEER}/r.txt"
+git -C "${ST_PEER}" add -A
+git -C "${ST_PEER}" commit -q -m "remote moves ahead"
+git -C "${ST_PEER}" push -q "${WORK}/origins/status.git" "HEAD:${ST_REF}"
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run fetch -q >/dev/null 2>&1)
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run reset -q --hard HEAD~1 >/dev/null 2>&1)
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_eq "behind remote" "notes: clean, behind remote" "${RUN_OUT}"
+
+# Now commit locally too: ahead AND behind. The porcelain "[ahead N]" suffix
+# collapses this case, which is why position comes from rev-list instead.
+printf 'local\n' > "${ST_PROJ}/notes/d.txt"
+(cd "${ST_PROJ}" && "${NOOK}" -n notes run add --all && "${NOOK}" -n notes run commit -q -m diverge)
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_eq "diverged reports both directions" "notes: clean, ahead of and behind remote" "${RUN_OUT}"
+
+section "status: reports every nook, including a broken one, and exits nonzero"
+
+# Two nooks in one repo: a healthy one and a broken one. The broken one must
+# not suppress the healthy one's line -- status reports all, then trips rc.
+(cd "${ST_PROJ}" && "${NOOK}" init scratch origin --dir scratchpad >/dev/null)
+ST_SCRATCH_SLUG=$(slug_for_name "${ST_PROJ}" scratch)
+rm -rf "${ST_PROJ}/.git/nook/${ST_SCRATCH_SLUG}.git"
+run_cmd_in "${ST_PROJ}" "${NOOK}" status
+assert_exit_nonzero "status exits nonzero when a nook is broken"
+assert_contains "broken nook is keyed by its bare name" "${RUN_OUT}" "scratch: no inner repo"
+assert_contains "status still reports the healthy nook alongside the broken one" "${RUN_OUT}" "notes: "
+if [[ "${RUN_OUT}" == *"fatal:"* ]]; then fail "raw git error leaked from status"; else pass "status leaks no raw git error"; fi
+
+section "status: flags a dangling primary home instead of aborting"
+
+ST_GONE="${WORK}/proj-status-gone"
+make_project_repo "${ST_GONE}" yes "status-gone"
+(cd "${ST_GONE}" && "${NOOK}" init vault origin >/dev/null)
+ST_GONE_SLUG=$(slug_for_name "${ST_GONE}" vault)
+printf 'keep\n' > "${ST_GONE}/vault/k.txt"
+(cd "${ST_GONE}" && "${NOOK}" -n vault run add --all && "${NOOK}" -n vault run commit -q -m keep)
+rm -rf "${ST_GONE}/vault"
+run_cmd_in "${ST_GONE}" "${NOOK}" status
+assert_exit_nonzero "status exits nonzero when the primary home is gone"
+# Label is the bare name; the remediation command carries the full slug so it
+# stays copy-pasteable and unambiguous.
+assert_eq "dangling home line" "vault: content missing, run: git nook -n ${ST_GONE_SLUG} materialize" "${RUN_OUT}"
+# And it recovers cleanly once materialized.
+(cd "${ST_GONE}" && "${NOOK}" materialize >/dev/null)
+run_cmd_in "${ST_GONE}" "${NOOK}" status
+assert_exit_zero "status exits 0 again after materialize"
+
+section "status: no nooks configured"
+
+ST_EMPTY="${WORK}/proj-status-empty"
+make_project_repo "${ST_EMPTY}" no
+run_cmd_in "${ST_EMPTY}" "${NOOK}" status
+assert_exit_zero "status with no nooks exits 0"
+assert_contains "empty status explains how to create one" "${RUN_OUT}" "git nook init"
+
 # --- passthrough: full git against the inner repo --------------------------------
 
 section "passthrough: status/add/commit/log round trip"
