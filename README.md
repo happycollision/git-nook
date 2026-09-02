@@ -348,8 +348,23 @@ compares the wrong files. Note also that `git -C "$(git nook -n notes git-dir)"`
 does not work for anything needing a work tree; use the two-flag form above.
 
 Some GUIs assume a repo looks like `<project>/.git` and won't open a bare
-git-dir path directly. If yours doesn't, `run` is the fallback that always
-works.
+git-dir path directly. GitKraken is one: it ignores `GIT_DIR`, does its own
+filesystem discovery, and rejects a nook's `branch.<name>.merge` (which points
+at `refs/nook/<slug>/files`, not `refs/heads/*`) as an invalid merge ref. That
+is the invisibility design working as intended — GUI tools want a branch under
+`refs/heads/*`, and a nook deliberately has none.
+
+For those tools, clone the nook's git-dir into a throwaway directory. Cloning
+rewrites the remote-tracking config to a conventional `refs/heads/main`, so the
+result is an ordinary repo with the nook's full history that any GUI will open:
+
+```sh
+git clone "$(git nook -n notes git-dir)" /tmp/notes-view
+```
+
+Treat that clone as **read-only**: it is a snapshot, it does not update as you
+commit in the nook (re-clone to refresh), and pushing from it would target the
+nook's own refs. To make changes, use the nook itself.
 
 Commands that read files (rather than just objects) need the nook materialized
 in the worktree you're standing in — `git nook -n <name> show` reports
