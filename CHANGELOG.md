@@ -5,6 +5,38 @@ All notable changes to `git-nook` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-02
+
+### Added
+
+- `git nook -n <name> git-dir` and `git nook -n <name> home` print the nook's
+  inner git-dir and its content directory, respectively — exactly one bare
+  absolute path each, so the value composes directly in a subshell
+  (`fork "$(git nook -n notes git-dir)"`). `show` already reported both as
+  labeled fields; these exist for scripts and for launching external GUI tools
+  that want a path rather than a git command. Both are read-only: they never
+  materialize, contact a remote, or mutate config. `home` errors instead of
+  printing an empty line when no home is recorded, so
+  `cd "$(git nook -n x home)"` cannot silently land in `$HOME`.
+
+### Documentation
+
+- New README section, "Diffing and browsing a nook." A nook has always been a
+  real local git repository, so any history tool already works on it through
+  `run` (`git nook -n notes run difftool HEAD~3`); this documents that, plus
+  two ways to get a confident wrong answer:
+  - Driving git by path requires **both** `--git-dir` and `--work-tree`. The
+    inner repo sets `core.bare false`, so `--git-dir` alone does not error —
+    git silently treats the caller's cwd as the work tree and compares the
+    wrong files.
+  - Some GUIs reject a bare git-dir. GitKraken ignores `GIT_DIR`, does its own
+    filesystem discovery, and rejects a nook's `branch.<name>.merge`
+    (`refs/nook/<slug>/files`) as an invalid merge ref, since it expects
+    `refs/heads/*` — the invisibility design working as intended. For those
+    tools, clone the git-dir into a throwaway directory: cloning rewrites the
+    tracking config to a conventional `refs/heads/main`, yielding an ordinary
+    repo any GUI will open. Read-only; it is a snapshot.
+
 ## [0.4.0] - 2026-07-22
 
 ### Changed
@@ -95,6 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Earlier development releases (pre-universal-identity).
 
+[0.5.0]: https://github.com/happycollision/git-nook/releases/tag/v0.5.0
 [0.4.0]: https://github.com/happycollision/git-nook/releases/tag/v0.4.0
 [0.3.0]: https://github.com/happycollision/git-nook/releases/tag/v0.3.0
 [0.2.1]: https://github.com/happycollision/git-nook/releases/tag/v0.2.1
